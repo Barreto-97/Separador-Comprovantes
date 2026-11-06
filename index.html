@@ -628,43 +628,43 @@ function setProgress(pct, label) {
 // ── Regex helpers (port from Python) ────────────────────────────────────────
 
 function matchPagamentoOutros(text) {
-  if (!/TED\s*-\s*outra titularidade/i.test(text) && !/dados do benefici[áa]rio/i.test(text)) return null;
+  // Normaliza quebras de linha e múltiplos espaços gerados pelo OCR
+  const norm = text.replace(/\s+/g, ' ');
 
+  // Verifica se pertence ao modelo TED Outra Titularidade / Beneficiário
+  if (!/outra\s*titularidade/i.test(norm) && !/benefici[áa]rio/i.test(norm)) return null;
+
+  // 1. Nome do Beneficiário (busca após 'beneficiário' -> 'nome', parando em 'agência', 'cpf' ou 'cnpj')
   let name = "";
-  const idxBenef = text.search(/dados do benefici[áa]rio/i);
-  if (idxBenef !== -1) {
-    const blockBenef = text.substring(idxBenef);
-    const mNome = blockBenef.match(/nome[\s\S]{0,50}?([A-Za-z0-9\-\.\&\s]{3,60}?)(?:agência|cpf|cnpj)/i);
-    if (mNome) {
-      const cleanName = mNome[1].trim();
-      name = cleanName.split(/\s+/).slice(0, 2).join(' ');
-    }
+  const mBenef = norm.match(/benefici[áa]rio[\s\S]{0,60}?nome\s*[:|]?\s*([A-Za-z0-9\-\.\&\s]{3,60}?)\s+(?:ag[êe]ncia|cpf|cnpj)/i);
+  if (mBenef) {
+    const cleanName = mBenef[1].replace(/^[^A-Za-z0-9]+/, '').trim();
+    name = cleanName.split(/\s+/).slice(0, 2).join(' ');
   }
   if (!name) return null;
 
+  // 2. ID do Pagador (busca a partir de 'informações fornecidas', independente da posição de 'pagador')
   let id = "";
-  const idxInfo = text.search(/informa[çc][õo]es fornecidas/i);
-  if (idxInfo !== -1) {
-    const blockInfo = text.substring(idxInfo);
-    const mId = blockInfo.match(/pagador[\s\S]{0,50}?([A-Z]{4}\d{4,8})/i);
-    if (mId) id = mId[1];
-  }
-  if (!id) {
-    const fallbackId = text.match(/\b(BSAO|BCPQ|BCWB|BITJ|BSSA|BRRIO|BPOA)\d{4,8}\b/i);
+  const mIdInfo = norm.match(/informa[çc][õo]es\s+fornecidas[\s\S]{0,50}?\b([A-Z]{4}[0-9O]{4,8})\b/i);
+  if (mIdInfo) {
+    id = mIdInfo[1];
+  } else {
+    const fallbackId = norm.match(/\b(BSAO|BCPQ|BCWB|BITJ|BSSA|BRRIO|BPOA)[0-9O]{4,8}\b/i);
     if (fallbackId) id = fallbackId[0];
-    else return null;
   }
+  if (!id) return null;
+  // Corrige caso o OCR tenha lido o número zero '0' como letra 'O' na parte numérica do código
+  id = id.substring(0, 4).toUpperCase() + id.substring(4).replace(/O/gi, '0');
 
+  // 3. Valor do Pagamento (flexível para R$, RS, R5 ou leitura direta dos números com vírgula)
   let valor = "";
-  const idxVal = text.search(/valor do pagamento/i);
-  if (idxVal !== -1) {
-    const blockVal = text.substring(idxVal);
-    const mVal = blockVal.match(/R\$\s*([\d.,]+)/i);
-    if (mVal) valor = mVal[1];
+  const mVal = norm.match(/valor\s+do\s+pagamento[\s\S]{0,35}?([\d.]+,\d{2})/i);
+  if (mVal) {
+    valor = mVal[1].trim();
   }
   if (!valor) return null;
 
-  return `${id.toUpperCase()} - ${name.toUpperCase()} - ${valor}.pdf`;
+  return `${id} - ${name.toUpperCase()} - ${valor}.pdf`;
 }
  
  function matchDARE(text) {
@@ -789,21 +789,25 @@ async function processFile() {
       const token = await page.getTextContent();
       let text  = token.items.map(t => t.str).join(' ');
 
-      // NOVO: Se o texto extraído for muito curto, trata-se de um PDF/Imagem. Aciona o OCR.
+// NOVO: Se o texto extraído for muito curto, trata-se de um PDF/Imagem. Aciona o OCR.
       if (text.trim().length < 50) {
         log(`Pág. ${i+1} é uma imagem. Lendo com OCR (pode demorar alguns segundos)...`, 'log-warn');
         setProgress(pct, `Aplicando OCR na página ${i + 1}...`);
         
-        // Renderiza a página como imagem numa tela virtual
-        const viewport = page.getViewport({ scale: 1.5 }); // Escala 1.5 melhora a nitidez da leitura
+        // Escala 2.5 garante alta definição para fontes pequenas de comprovantes
+        const viewport = page.getViewport({ scale: 2.5 });
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         canvas.height = viewport.height;
         canvas.width = viewport.width;
         
+        // Pinta o fundo de branco (evita fundo transparente/preto que cega o OCR)
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
         await page.render({ canvasContext: ctx, viewport: viewport }).promise;
         
-        // Passa a imagem pro Tesseract tentar ler em português
+        // Passa a imagem pro Tesseract ler em português
         const result = await Tesseract.recognize(canvas, 'por');
         text = result.data.text;
       }
