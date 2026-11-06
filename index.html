@@ -9,7 +9,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- NOVO: Biblioteca OCR para ler PDFs que são imagens -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
   :root {
     --bg:       #080C14;
     --surface:  #0E1420;
@@ -621,40 +624,33 @@ function setProgress(pct, label) {
 // ── Regex helpers (port from Python) ────────────────────────────────────────
 
 function matchPagamentoOutros(text) {
-  // Confirma se o documento é do tipo TED/Outra titularidade
-  if (!/TED\s*-\s*outra titularidade/i.test(text) && !/dados do beneficiário/i.test(text)) return null;
+  if (!/TED\s*-\s*outra titularidade/i.test(text) && !/dados do benefici[áa]rio/i.test(text)) return null;
 
-  // 1. Beneficiário (Busca isolada no bloco do beneficiário)
   let name = "";
-  const idxBenef = text.search(/dados do beneficiário/i);
+  const idxBenef = text.search(/dados do benefici[áa]rio/i);
   if (idxBenef !== -1) {
     const blockBenef = text.substring(idxBenef);
-    // Pula caracteres estranhos (como o pipe '|' ou quebras de linha) entre 'nome' e o texto real
     const mNome = blockBenef.match(/nome[\s\S]{0,50}?([A-Za-z0-9\-\.\&\s]{3,60}?)(?:agência|cpf|cnpj)/i);
     if (mNome) {
       const cleanName = mNome[1].trim();
-      name = cleanName.split(/\s+/).slice(0, 2).join(' '); // Pega só as 2 primeiras palavras
+      name = cleanName.split(/\s+/).slice(0, 2).join(' ');
     }
   }
-  if (!name) return null; // Obrigatório achar o nome para validar este modelo
+  if (!name) return null;
 
-  // 2. ID do Pagador
   let id = "";
-  const idxInfo = text.search(/informações fornecidas pelo/i);
+  const idxInfo = text.search(/informa[çc][õo]es fornecidas/i);
   if (idxInfo !== -1) {
     const blockInfo = text.substring(idxInfo);
-    // Ignora a sujeira entre a palavra "pagador" e o código
     const mId = blockInfo.match(/pagador[\s\S]{0,50}?([A-Z]{4}\d{4,8})/i);
     if (mId) id = mId[1];
   }
   if (!id) {
-    // Fallback: se quebrar, tenta achar o código direto no texto geral do PDF
     const fallbackId = text.match(/\b(BSAO|BCPQ|BCWB|BITJ|BSSA|BRRIO|BPOA)\d{4,8}\b/i);
     if (fallbackId) id = fallbackId[0];
     else return null;
   }
 
-  // 3. Valor do Pagamento
   let valor = "";
   const idxVal = text.search(/valor do pagamento/i);
   if (idxVal !== -1) {
@@ -787,7 +783,26 @@ async function processFile() {
       // Extract text via pdf.js
       const page  = await pdfJS.getPage(i + 1);
       const token = await page.getTextContent();
-      const text  = token.items.map(t => t.str).join(' ');
+      let text  = token.items.map(t => t.str).join(' ');
+
+      // NOVO: Se o texto extraído for muito curto, trata-se de um PDF/Imagem. Aciona o OCR.
+      if (text.trim().length < 50) {
+        log(`Pág. ${i+1} é uma imagem. Lendo com OCR (pode demorar alguns segundos)...`, 'log-warn');
+        setProgress(pct, `Aplicando OCR na página ${i + 1}...`);
+        
+        // Renderiza a página como imagem numa tela virtual
+        const viewport = page.getViewport({ scale: 1.5 }); // Escala 1.5 melhora a nitidez da leitura
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        
+        await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+        
+        // Passa a imagem pro Tesseract tentar ler em português
+        const result = await Tesseract.recognize(canvas, 'por');
+        text = result.data.text;
+      }
 
 // Identify document type
       let docName = matchPagamentoOutros(text)
