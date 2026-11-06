@@ -533,6 +533,15 @@
         <span class="map-tag tag-icms">ICMS</span>
       </div>
 
+      <div class="map-card">
+        <div>
+          <h4>DARE SP / GNRE Sefaz SP (ICMS V2) <span class="new-badge">novo</span></h4>
+          <p>Detecta o cabeçalho <code style="font-family:'DM Mono',monospace;font-size:12px;color:#E5C07B">DARE SP/ GNRE Sefaz SP</code> e extrai o valor do pagamento (validado por último).</p>
+          <div class="map-output">→ DARE SP - [valor].pdf</div>
+        </div>
+        <span class="map-tag tag-icms">DARE SP</span>
+      </div>
+
     </div>
   </section>
 
@@ -681,7 +690,7 @@ function matchPagamentoOutrosV2(text) {
 
   // Confirma se é o layout de código de barras / via contribuinte (e garante que não é um DARE)
   if (!/via\s+contribuinte/i.test(norm) && !/c[óo]digo\s+de\s+barras/i.test(norm)) return null;
-  if (/SEFAZ-SP\/DARE/i.test(norm)) return null;
+  if (/SEFAZ-SP\/DARE/i.test(norm) || /DARE\s+SP/i.test(norm)) return null;
 
   // 1. Descrição (captura tudo entre 'descrição' e 'valor do pagamento')
   const mDesc = norm.match(/descri[çc][ãa]o\s*[:|]?\s*(.+?)\s+valor\s+do\s+pagamento/i);
@@ -747,10 +756,23 @@ function matchICMS(text) {
     return `${codigo} - ${valorICMS}.pdf`;
   }
 
-  // Fallback: last 10 digits of parcelamento number
+// Fallback: last 10 digits of parcelamento number
   const di = mDI[1].trim();
   const di10 = di.length >= 10 ? di.slice(-10) : di;
   return `DI ${di10} - ${valorICMS}.pdf`;
+}
+
+function matchDARESP(text) {
+  const norm = text.replace(/\s+/g, ' ');
+
+  // Verifica o cabeçalho fixo "DARE SP" (ou "GNRE Sefaz SP")
+  if (!/DARE\s+SP/i.test(norm) && !/GNRE\s+Sefaz\s+SP/i.test(norm)) return null;
+
+  // Extrai o Valor do Pagamento
+  const mVal = norm.match(/valor\s+do\s+pagamento[\s\S]{0,35}?([\d.]+,\d{2})/i);
+  if (!mVal) return null;
+
+  return `DARE SP - ${mVal[1].trim()}.pdf`;
 }
 
 function sanitizeName(name) {
@@ -858,7 +880,8 @@ async function processFile() {
                  || matchPagamentoOutrosV2(text)
                  || matchDARE(text)
                  || matchNormal(text)
-                 || matchICMS(text);
+                 || matchICMS(text)
+                 || matchDARESP(text);
 
       if (docName) {
         docName = uniqueName(usedNames, docName);
