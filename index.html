@@ -490,6 +490,15 @@
 
      <div class="map-card">
         <div>
+          <h4>Pagamento com Código de Barras (Outros V2) <span class="new-badge">novo</span></h4>
+          <p>Detecta comprovantes via contribuinte/código de barras. Extrai a identificação do comprovante, a descrição e o valor do pagamento.</p>
+          <div class="map-output">→ [ID Comprovante] - [Descrição] - [valor].pdf</div>
+        </div>
+        <span class="map-tag tag-normal" style="background: rgba(86,182,194,0.10); color: #56B6C2; border-color: rgba(86,182,194,0.20);">BARRAS/V2</span>
+      </div>
+     
+     <div class="map-card">
+        <div>
           <h4>TED Outra Titularidade (Pagamentos Outros) <span class="new-badge">novo</span></h4>
           <p>Detecta transferências para terceiros. Extrai a informação do pagador, as duas primeiras palavras do beneficiário e o valor pago.</p>
           <div class="map-output">→ [ID Pagador] - [Nome Beneficiário] - [valor].pdf</div>
@@ -664,10 +673,42 @@ function matchPagamentoOutros(text) {
   }
   if (!valor) return null;
 
-  return `${id} - ${name.toUpperCase()} - ${valor}.pdf`;
+return `${id} - ${name.toUpperCase()} - ${valor}.pdf`;
+}
+
+function matchPagamentoOutrosV2(text) {
+  const norm = text.replace(/\s+/g, ' ');
+
+  // Confirma se é o layout de código de barras / via contribuinte (e garante que não é um DARE)
+  if (!/via\s+contribuinte/i.test(norm) && !/c[óo]digo\s+de\s+barras/i.test(norm)) return null;
+  if (/SEFAZ-SP\/DARE/i.test(norm)) return null;
+
+  // 1. Descrição (captura tudo entre 'descrição' e 'valor do pagamento')
+  const mDesc = norm.match(/descri[çc][ãa]o\s*[:|]?\s*(.+?)\s+valor\s+do\s+pagamento/i);
+  if (!mDesc) return null;
+  const descricao = mDesc[1].replace(/^[^A-Za-z0-9]+/, '').trim();
+
+  // 2. Valor do Pagamento
+  const mVal = norm.match(/valor\s+do\s+pagamento[\s\S]{0,30}?([\d.]+,\d{2})/i);
+  if (!mVal) return null;
+  const valor = mVal[1].trim();
+
+  // 3. Identificação do Comprovante (ignora 'dados do pagador' se estiver intercalado na leitura da coluna)
+  let id = "";
+  const mId = norm.match(/identifica[çc][ãa]o\s+do\s+comprovante[\s\S]{0,50}?\b([A-Z]{4}[0-9O]{4,8})\b/i);
+  if (mId) {
+    id = mId[1];
+  } else {
+    const fallbackId = norm.match(/\b(BSAO|BCPQ|BCWB|BITJ|BSSA|BRRIO|BPOA)[0-9O]{4,8}\b/i);
+    if (fallbackId) id = fallbackId[0];
+  }
+  if (!id) return null;
+  id = id.substring(0, 4).toUpperCase() + id.substring(4).replace(/O/gi, '0');
+
+  return `${id} - ${descricao.toUpperCase()} - ${valor}.pdf`;
 }
  
- function matchDARE(text) {
+function matchDARE(text) {
   if (!/SEFAZ-SP\/DARE/i.test(text)) return null;
   const mVal = text.match(/valor\s*:\s*R\$\s*([\d.,]+)/i);
   const mId  = text.match(/identifica[çc][ãa]o do comprovante\s*:\s*([A-Za-z0-9]+)/i);
@@ -814,6 +855,7 @@ async function processFile() {
 
 // Identify document type
       let docName = matchPagamentoOutros(text)
+                 || matchPagamentoOutrosV2(text)
                  || matchDARE(text)
                  || matchNormal(text)
                  || matchICMS(text);
